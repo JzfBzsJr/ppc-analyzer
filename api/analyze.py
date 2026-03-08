@@ -37,16 +37,39 @@ def extract_campaign_type(name):
 
 
 def _load_amazon_report(file_bytes):
-    """Load Excel, skipping Amazon metadata rows at the top."""
-    raw = pd.read_excel(io.BytesIO(file_bytes), header=None)
-    # Find the header row: first row where one cell contains "Campaign Name"
+    """Load Excel, skipping Amazon metadata rows at the top.
+    Tries openpyxl first, falls back to xlrd for older .xls files."""
+    buf = io.BytesIO(file_bytes)
+    try:
+        raw = pd.read_excel(buf, header=None, engine="openpyxl")
+    except Exception:
+        buf.seek(0)
+        raw = pd.read_excel(buf, header=None)
+
+    # Find the header row: first row containing "Campaign Name"
     header_row = 0
     for i, row in raw.iterrows():
         if any("Campaign Name" in str(v) for v in row.values):
             header_row = i
             break
-    df = pd.read_excel(io.BytesIO(file_bytes), header=header_row)
+
+    buf.seek(0)
+    try:
+        df = pd.read_excel(buf, header=header_row, engine="openpyxl")
+    except Exception:
+        buf.seek(0)
+        df = pd.read_excel(buf, header=header_row)
+
     df.columns = df.columns.str.strip()
+
+    # Detect report type
+    if "Customer Search Term" in df.columns:
+        df["_report_type"] = "search_term"
+    elif "Advertised ASIN" in df.columns:
+        df["_report_type"] = "advertised_product"
+    else:
+        df["_report_type"] = "unknown"
+
     return df
 
 
@@ -105,22 +128,35 @@ def analyze(file_bytes):
         "aov":           round(safe_div(total_sales, total_orders), 2),
     }
 
-    # Products
-    asin_cols = ["Impressions", "Clicks", "Spend", "7 Day Total Sales", "7 Day Total Orders (#)"]
+    report_type = df["_report_type"].iloc[0] if "_report_type" in df.columns else "unknown"
+
+    # Products / Keywords — adapt grouping to report type
+    agg_cols = ["Impressions", "Clicks", "Spend", "7 Day Total Sales", "7 Day Total Orders (#)"]
     for col in ["7 Day Advertised SKU Sales", "7 Day Other SKU Sales"]:
         if col in df.columns:
-            asin_cols.append(col)
+            agg_cols.append(col)
 
-    group_keys = ["Advertised ASIN", "Advertised SKU"] if "Advertised ASIN" in df.columns else ["Campaign Name"]
-    asin_perf = df.groupby(group_keys)[asin_cols].sum().reset_index()
+    if report_type == "advertised_product" and "Advertised ASIN" in df.columns:
+        group_keys = ["Advertised ASIN", "Advertised SKU"]
+        label_a, label_b = "asin", "sku"
+    elif report_type == "search_term" and "Customer Search Term" in df.columns:
+        group_keys = ["Customer Search Term"]
+        label_a, label_b = "search_term", "search_term"
+    else:
+        group_keys = ["Campaign Name"]
+        label_a, label_b = "asin", "sku"
+
+    perf = df.groupby(group_keys)[agg_cols].sum().reset_index()
 
     products = []
-    for _, r in asin_perf.iterrows():
+    for _, r in perf.iterrows():
         if r["Spend"] > 0:
             halo = round(float(r.get("7 Day Other SKU Sales", 0)), 2)
+            key_a = r.get(group_keys[0], "")
+            key_b = r.get(group_keys[-1], key_a)
             products.append({
-                "asin":        r.get("Advertised ASIN", ""),
-                "sku":         r.get("Advertised SKU", r.get("Campaign Name", "")),
+                "asin":        str(key_a),
+                "sku":         str(key_b),
                 "spend":       round(r["Spend"], 2),
                 "sales":       round(r["7 Day Total Sales"], 2),
                 "orders":      int(r["7 Day Total Orders (#)"]),
@@ -209,6 +245,7 @@ def analyze(file_bytes):
         "top_performers": top_performers,
         "wasted_spend":   wasted_spend,
         "daily_trends":   daily_trends,
+        "report_type":    report_type,
     }
 
 
@@ -299,9 +336,13 @@ def build_excel(data):
     ws.column_dimensions["B"].width = 18
     ws.column_dimensions["C"].width = 35
 
-    # Sheet 2: Products
-    ws2 = wb.create_sheet("Products")
-    h2 = ["ASIN", "SKU", "Spend", "Sales", "Orders", "Impressions",
+    # Sheet 2: Products / Keywords (label adapts to report type)
+    rtype = data.get("report_type", "unknown")
+    sheet2_name = "Keywords" if rtype == "search_term" else "Products"
+    col1_label  = "Search Term" if rtype == "search_term" else "ASIN"
+    col2_label  = "Search Term" if rtype == "search_term" else "SKU"
+    ws2 = wb.create_sheet(sheet2_name)
+    h2 = [col1_label, col2_label, "Spend", "Sales", "Orders", "Impressions",
           "Clicks", "ACOS %", "ROAS", "CTR %", "CVR %", "CPC", "Halo Sales"]
     style_header(ws2, 1, h2)
     for i, p in enumerate(sorted(data["products"], key=lambda x: x["spend"], reverse=True), 2):
