@@ -36,29 +36,61 @@ def extract_campaign_type(name):
     return "Other"
 
 
-def analyze(file_bytes):
-    df = pd.read_excel(io.BytesIO(file_bytes))
+def _load_amazon_report(file_bytes):
+    """Load Excel, skipping Amazon metadata rows at the top."""
+    raw = pd.read_excel(io.BytesIO(file_bytes), header=None)
+    # Find the header row: first row where one cell contains "Campaign Name"
+    header_row = 0
+    for i, row in raw.iterrows():
+        if any("Campaign Name" in str(v) for v in row.values):
+            header_row = i
+            break
+    df = pd.read_excel(io.BytesIO(file_bytes), header=header_row)
     df.columns = df.columns.str.strip()
+    return df
 
-    required = {"Campaign Name", "Date", "Impressions", "Clicks", "Spend",
+
+def analyze(file_bytes):
+    df = _load_amazon_report(file_bytes)
+
+    required = {"Campaign Name", "Impressions", "Clicks", "Spend",
                 "7 Day Total Sales", "7 Day Total Orders (#)"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError("Отчёт не содержит нужных колонок: {}".format(missing))
+        raise ValueError("Отчёт не содержит нужных колонок: {}. Колонки в файле: {}".format(
+            missing, list(df.columns[:10])))
 
     df["Campaign Type"] = df["Campaign Name"].apply(extract_campaign_type)
+
+    # Drop rows without campaign data
+    df = df.dropna(subset=["Campaign Name", "Spend"])
+    df["Spend"] = pd.to_numeric(df["Spend"], errors="coerce").fillna(0)
+    df["7 Day Total Sales"] = pd.to_numeric(df["7 Day Total Sales"], errors="coerce").fillna(0)
+    df["7 Day Total Orders (#)"] = pd.to_numeric(df["7 Day Total Orders (#)"], errors="coerce").fillna(0)
+    df["Impressions"] = pd.to_numeric(df["Impressions"], errors="coerce").fillna(0)
+    df["Clicks"] = pd.to_numeric(df["Clicks"], errors="coerce").fillna(0)
+
+    # Date range — optional column
+    has_date = "Date" in df.columns
+    if has_date:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        date_start = str(df["Date"].min().date()) if not df["Date"].isna().all() else "N/A"
+        date_end   = str(df["Date"].max().date()) if not df["Date"].isna().all() else "N/A"
+        days = (df["Date"].max() - df["Date"].min()).days + 1 if not df["Date"].isna().all() else 0
+    else:
+        date_start, date_end, days = "N/A", "N/A", 0
 
     total_spend       = df["Spend"].sum()
     total_sales       = df["7 Day Total Sales"].sum()
     total_orders      = df["7 Day Total Orders (#)"].sum()
-    total_units       = df["7 Day Total Units (#)"].sum() if "7 Day Total Units (#)" in df.columns else 0
+    total_units       = pd.to_numeric(df["7 Day Total Units (#)"], errors="coerce").sum() if "7 Day Total Units (#)" in df.columns else 0
     total_impressions = df["Impressions"].sum()
     total_clicks      = df["Clicks"].sum()
 
     overall = {
-        "date_start":    str(df["Date"].min().date()),
-        "date_end":      str(df["Date"].max().date()),
-        "days":          (df["Date"].max() - df["Date"].min()).days + 1,
+        "date_start":    date_start,
+        "date_end":      date_end,
+        "days":          int(days),
         "spend":         round(total_spend, 2),
         "sales":         round(total_sales, 2),
         "orders":        int(total_orders),
@@ -154,21 +186,21 @@ def analyze(file_bytes):
             "clicks":   int(r["Clicks"]),
         })
 
-    # Daily trends
-    daily = df.groupby("Date").agg({
-        "Impressions": "sum", "Clicks": "sum", "Spend": "sum",
-        "7 Day Total Sales": "sum", "7 Day Total Orders (#)": "sum"
-    }).reset_index()
-
+    # Daily trends (only if Date column exists)
     daily_trends = []
-    for _, r in daily.iterrows():
-        daily_trends.append({
-            "date":   str(r["Date"].date()),
-            "spend":  round(r["Spend"], 2),
-            "sales":  round(r["7 Day Total Sales"], 2),
-            "orders": int(r["7 Day Total Orders (#)"]),
-            "acos":   round(safe_div(r["Spend"], r["7 Day Total Sales"]) * 100, 2),
-        })
+    if has_date and not df["Date"].isna().all():
+        daily = df.groupby("Date").agg({
+            "Impressions": "sum", "Clicks": "sum", "Spend": "sum",
+            "7 Day Total Sales": "sum", "7 Day Total Orders (#)": "sum"
+        }).reset_index()
+        for _, r in daily.iterrows():
+            daily_trends.append({
+                "date":   str(r["Date"].date()),
+                "spend":  round(r["Spend"], 2),
+                "sales":  round(r["7 Day Total Sales"], 2),
+                "orders": int(r["7 Day Total Orders (#)"]),
+                "acos":   round(safe_div(r["Spend"], r["7 Day Total Sales"]) * 100, 2),
+            })
 
     return {
         "overall":        overall,
