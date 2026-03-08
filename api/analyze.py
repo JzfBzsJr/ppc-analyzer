@@ -1,13 +1,15 @@
-from http.server import BaseHTTPRequestHandler
+from flask import Flask, request, Response
 import io
 import json
 import re
+from typing import Optional
 import pandas as pd
 import numpy as np
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
+app = Flask(__name__)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,63 +44,62 @@ def analyze(file_bytes):
                 "7 Day Total Sales", "7 Day Total Orders (#)"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError(f"Отчёт не содержит нужных колонок: {missing}")
+        raise ValueError("Отчёт не содержит нужных колонок: {}".format(missing))
 
     df["Campaign Type"] = df["Campaign Name"].apply(extract_campaign_type)
 
-    total_spend      = df["Spend"].sum()
-    total_sales      = df["7 Day Total Sales"].sum()
-    total_orders     = df["7 Day Total Orders (#)"].sum()
-    total_units      = df.get("7 Day Total Units (#)", pd.Series([0])).sum()
+    total_spend       = df["Spend"].sum()
+    total_sales       = df["7 Day Total Sales"].sum()
+    total_orders      = df["7 Day Total Orders (#)"].sum()
+    total_units       = df["7 Day Total Units (#)"].sum() if "7 Day Total Units (#)" in df.columns else 0
     total_impressions = df["Impressions"].sum()
-    total_clicks     = df["Clicks"].sum()
+    total_clicks      = df["Clicks"].sum()
 
     overall = {
-        "date_start":   str(df["Date"].min().date()),
-        "date_end":     str(df["Date"].max().date()),
-        "days":         (df["Date"].max() - df["Date"].min()).days + 1,
-        "spend":        round(total_spend, 2),
-        "sales":        round(total_sales, 2),
-        "orders":       int(total_orders),
-        "units":        int(total_units),
-        "impressions":  int(total_impressions),
-        "clicks":       int(total_clicks),
-        "acos":         round(safe_div(total_spend, total_sales) * 100, 2),
-        "roas":         round(safe_div(total_sales, total_spend), 2),
-        "ctr":          round(safe_div(total_clicks, total_impressions) * 100, 2),
-        "cvr":          round(safe_div(total_orders, total_clicks) * 100, 2),
-        "cpc":          round(safe_div(total_spend, total_clicks), 2),
-        "aov":          round(safe_div(total_sales, total_orders), 2),
+        "date_start":    str(df["Date"].min().date()),
+        "date_end":      str(df["Date"].max().date()),
+        "days":          (df["Date"].max() - df["Date"].min()).days + 1,
+        "spend":         round(total_spend, 2),
+        "sales":         round(total_sales, 2),
+        "orders":        int(total_orders),
+        "units":         int(total_units),
+        "impressions":   int(total_impressions),
+        "clicks":        int(total_clicks),
+        "acos":          round(safe_div(total_spend, total_sales) * 100, 2),
+        "roas":          round(safe_div(total_sales, total_spend), 2),
+        "ctr":           round(safe_div(total_clicks, total_impressions) * 100, 2),
+        "cvr":           round(safe_div(total_orders, total_clicks) * 100, 2),
+        "cpc":           round(safe_div(total_spend, total_clicks), 2),
+        "aov":           round(safe_div(total_sales, total_orders), 2),
     }
 
     # Products
-    asin_cols = {"Impressions", "Clicks", "Spend", "7 Day Total Sales", "7 Day Total Orders (#)"}
-    if "7 Day Advertised SKU Sales" in df.columns:
-        asin_cols.add("7 Day Advertised SKU Sales")
-    if "7 Day Other SKU Sales" in df.columns:
-        asin_cols.add("7 Day Other SKU Sales")
+    asin_cols = ["Impressions", "Clicks", "Spend", "7 Day Total Sales", "7 Day Total Orders (#)"]
+    for col in ["7 Day Advertised SKU Sales", "7 Day Other SKU Sales"]:
+        if col in df.columns:
+            asin_cols.append(col)
 
     group_keys = ["Advertised ASIN", "Advertised SKU"] if "Advertised ASIN" in df.columns else ["Campaign Name"]
-    asin_perf = df.groupby(group_keys)[list(asin_cols)].sum().reset_index()
+    asin_perf = df.groupby(group_keys)[asin_cols].sum().reset_index()
 
     products = []
     for _, r in asin_perf.iterrows():
         if r["Spend"] > 0:
-            halo = round(r.get("7 Day Other SKU Sales", 0), 2)
+            halo = round(float(r.get("7 Day Other SKU Sales", 0)), 2)
             products.append({
-                "asin":       r.get("Advertised ASIN", ""),
-                "sku":        r.get("Advertised SKU", r.get("Campaign Name", "")),
-                "spend":      round(r["Spend"], 2),
-                "sales":      round(r["7 Day Total Sales"], 2),
-                "orders":     int(r["7 Day Total Orders (#)"]),
+                "asin":        r.get("Advertised ASIN", ""),
+                "sku":         r.get("Advertised SKU", r.get("Campaign Name", "")),
+                "spend":       round(r["Spend"], 2),
+                "sales":       round(r["7 Day Total Sales"], 2),
+                "orders":      int(r["7 Day Total Orders (#)"]),
                 "impressions": int(r["Impressions"]),
-                "clicks":     int(r["Clicks"]),
-                "acos":       round(safe_div(r["Spend"], r["7 Day Total Sales"]) * 100, 2),
-                "roas":       round(safe_div(r["7 Day Total Sales"], r["Spend"]), 2),
-                "ctr":        round(safe_div(r["Clicks"], r["Impressions"]) * 100, 2),
-                "cvr":        round(safe_div(r["7 Day Total Orders (#)"], r["Clicks"]) * 100, 2),
-                "cpc":        round(safe_div(r["Spend"], r["Clicks"]), 2),
-                "halo_sales": halo,
+                "clicks":      int(r["Clicks"]),
+                "acos":        round(safe_div(r["Spend"], r["7 Day Total Sales"]) * 100, 2),
+                "roas":        round(safe_div(r["7 Day Total Sales"], r["Spend"]), 2),
+                "ctr":         round(safe_div(r["Clicks"], r["Impressions"]) * 100, 2),
+                "cvr":         round(safe_div(r["7 Day Total Orders (#)"], r["Clicks"]) * 100, 2),
+                "cpc":         round(safe_div(r["Spend"], r["Clicks"]), 2),
+                "halo_sales":  halo,
             })
 
     # Campaign types
@@ -120,7 +121,7 @@ def analyze(file_bytes):
         })
 
     # Campaign-level
-    camp_perf = df.groupby(["Campaign Name"]).agg({
+    camp_perf = df.groupby("Campaign Name").agg({
         "Impressions": "sum", "Clicks": "sum", "Spend": "sum",
         "7 Day Total Sales": "sum", "7 Day Total Orders (#)": "sum"
     }).reset_index()
@@ -133,13 +134,14 @@ def analyze(file_bytes):
 
     top_performers = []
     for _, r in profitable.iterrows():
+        cvr_val = r["CVR"] if not np.isnan(r["CVR"]) else 0
         top_performers.append({
             "campaign": r["Campaign Name"],
             "spend":    round(r["Spend"], 2),
             "sales":    round(r["7 Day Total Sales"], 2),
             "orders":   int(r["7 Day Total Orders (#)"]),
             "acos":     round(r["ACOS"], 2),
-            "cvr":      round(r["CVR"] if not np.isnan(r["CVR"]) else 0, 2),
+            "cvr":      round(cvr_val, 2),
         })
 
     # Wasted spend
@@ -169,26 +171,25 @@ def analyze(file_bytes):
         })
 
     return {
-        "overall": overall,
-        "products": products,
+        "overall":        overall,
+        "products":       products,
         "campaign_types": campaign_types,
         "top_performers": top_performers,
-        "wasted_spend": wasted_spend,
-        "daily_trends": daily_trends,
+        "wasted_spend":   wasted_spend,
+        "daily_trends":   daily_trends,
     }
 
 
 # ── Excel generation ──────────────────────────────────────────────────────────
 
-GREEN  = PatternFill("solid", fgColor="C6EFCE")
-YELLOW = PatternFill("solid", fgColor="FFEB9C")
-RED    = PatternFill("solid", fgColor="FFC7CE")
+GREEN       = PatternFill("solid", fgColor="C6EFCE")
+YELLOW      = PatternFill("solid", fgColor="FFEB9C")
+RED         = PatternFill("solid", fgColor="FFC7CE")
 HEADER_FILL = PatternFill("solid", fgColor="1F2937")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
-BOLD   = Font(bold=True)
-
-thin = Side(style="thin", color="D1D5DB")
-BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
+BOLD        = Font(bold=True)
+thin        = Side(style="thin", color="D1D5DB")
+BORDER      = Border(left=thin, right=thin, top=thin, bottom=thin)
 
 
 def acos_fill(v):
@@ -228,74 +229,68 @@ def build_excel(data):
     wb = openpyxl.Workbook()
     o = data["overall"]
 
-    # ── Sheet 1: Summary ──────────────────────────────────────────────────────
+    # Sheet 1: Summary
     ws = wb.active
     ws.title = "Summary"
     ws.append(["Amazon PPC Analysis"])
     ws["A1"].font = Font(bold=True, size=14)
-    ws.append([f"Period: {o['date_start']} — {o['date_end']}  ({o['days']} days)"])
+    ws.append(["Period: {} — {}  ({} days)".format(o["date_start"], o["date_end"], o["days"])])
     ws.append([])
-
     style_header(ws, 4, ["Metric", "Value", "Benchmark"])
     rows = [
-        ("Total Spend",       f"${o['spend']:,.2f}",   ""),
-        ("Total Sales",       f"${o['sales']:,.2f}",   ""),
-        ("Orders",            o["orders"],              ""),
-        ("Units",             o["units"],               ""),
-        ("Impressions",       f"{o['impressions']:,}",  ""),
-        ("Clicks",            f"{o['clicks']:,}",       ""),
-        ("ACOS",              f"{o['acos']:.1f}%",      "Good <25%  |  Warn 25-40%  |  Bad >40%"),
-        ("ROAS",              f"{o['roas']:.2f}x",      ""),
-        ("CTR",               f"{o['ctr']:.2f}%",       "Good >1%  |  Warn 0.5-1%"),
-        ("CVR",               f"{o['cvr']:.1f}%",       "Good >10%  |  Warn 5-10%"),
-        ("Avg CPC",           f"${o['cpc']:.2f}",       ""),
-        ("Avg Order Value",   f"${o['aov']:.2f}",       ""),
+        ("Total Spend",     "${:,.2f}".format(o["spend"]),  ""),
+        ("Total Sales",     "${:,.2f}".format(o["sales"]),  ""),
+        ("Orders",          o["orders"],                    ""),
+        ("Units",           o["units"],                     ""),
+        ("Impressions",     "{:,}".format(o["impressions"]),""),
+        ("Clicks",          "{:,}".format(o["clicks"]),     ""),
+        ("ACOS",            "{:.1f}%".format(o["acos"]),    "Good <25%  |  Warn 25-40%  |  Bad >40%"),
+        ("ROAS",            "{:.2f}x".format(o["roas"]),    ""),
+        ("CTR",             "{:.2f}%".format(o["ctr"]),     "Good >1%  |  Warn 0.5-1%"),
+        ("CVR",             "{:.1f}%".format(o["cvr"]),     "Good >10%  |  Warn 5-10%"),
+        ("Avg CPC",         "${:.2f}".format(o["cpc"]),     ""),
+        ("Avg Order Value", "${:.2f}".format(o["aov"]),     ""),
     ]
     for i, (metric, val, bench) in enumerate(rows, 5):
         ws.append([metric, val, bench])
         for col in range(1, 4):
             ws.cell(row=i, column=col).border = BORDER
         if metric == "ACOS":
-            fill = acos_fill(o["acos"])
-            if fill:
-                ws.cell(row=i, column=2).fill = fill
+            f = acos_fill(o["acos"])
+            if f:
+                ws.cell(row=i, column=2).fill = f
         if metric == "CVR":
-            fill = cvr_fill(o["cvr"])
-            if fill:
-                ws.cell(row=i, column=2).fill = fill
-
+            f = cvr_fill(o["cvr"])
+            if f:
+                ws.cell(row=i, column=2).fill = f
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 18
     ws.column_dimensions["C"].width = 35
 
-    # ── Sheet 2: Products ─────────────────────────────────────────────────────
+    # Sheet 2: Products
     ws2 = wb.create_sheet("Products")
-    headers = ["ASIN", "SKU", "Spend", "Sales", "Orders", "Impressions",
-               "Clicks", "ACOS %", "ROAS", "CTR %", "CVR %", "CPC", "Halo Sales"]
-    style_header(ws2, 1, headers)
+    h2 = ["ASIN", "SKU", "Spend", "Sales", "Orders", "Impressions",
+          "Clicks", "ACOS %", "ROAS", "CTR %", "CVR %", "CPC", "Halo Sales"]
+    style_header(ws2, 1, h2)
     for i, p in enumerate(sorted(data["products"], key=lambda x: x["spend"], reverse=True), 2):
-        row = [p["asin"], p["sku"], p["spend"], p["sales"], p["orders"],
-               p["impressions"], p["clicks"], p["acos"], p["roas"],
-               p["ctr"], p["cvr"], p["cpc"], p["halo_sales"]]
-        ws2.append(row)
-        for col in range(1, len(headers) + 1):
+        ws2.append([p["asin"], p["sku"], p["spend"], p["sales"], p["orders"],
+                    p["impressions"], p["clicks"], p["acos"], p["roas"],
+                    p["ctr"], p["cvr"], p["cpc"], p["halo_sales"]])
+        for col in range(1, len(h2) + 1):
             ws2.cell(row=i, column=col).border = BORDER
-        acos_col = ws2.cell(row=i, column=8)
-        fill = acos_fill(p["acos"])
-        if fill:
-            acos_col.fill = fill
-        cvr_col = ws2.cell(row=i, column=11)
-        fill2 = cvr_fill(p["cvr"])
-        if fill2:
-            cvr_col.fill = fill2
+        f = acos_fill(p["acos"])
+        if f:
+            ws2.cell(row=i, column=8).fill = f
+        f2 = cvr_fill(p["cvr"])
+        if f2:
+            ws2.cell(row=i, column=11).fill = f2
     autofit(ws2)
 
-    # ── Sheet 3: Campaign Types ───────────────────────────────────────────────
+    # Sheet 3: Campaign Types
     ws3 = wb.create_sheet("Campaign Types")
-    headers3 = ["Campaign Type", "Spend", "Sales", "Orders", "ACOS %", "CVR %", "CPC", "Assessment"]
-    style_header(ws3, 1, headers3)
-    sorted_types = sorted(data["campaign_types"], key=lambda x: x["acos"] if x["acos"] < 999 else 999)
-    for i, ct in enumerate(sorted_types, 2):
+    h3 = ["Campaign Type", "Spend", "Sales", "Orders", "ACOS %", "CVR %", "CPC", "Assessment"]
+    style_header(ws3, 1, h3)
+    for i, ct in enumerate(sorted(data["campaign_types"], key=lambda x: x["acos"] if x["acos"] < 999 else 999), 2):
         if ct["acos"] < 25:
             assessment = "Strong - Scale"
         elif ct["acos"] < 40:
@@ -304,46 +299,39 @@ def build_excel(data):
             assessment = "Needs optimization"
         else:
             assessment = "Review / Pause"
-        row = [ct["type"], ct["spend"], ct["sales"], ct["orders"],
-               ct["acos"], ct["cvr"], ct["cpc"], assessment]
-        ws3.append(row)
-        for col in range(1, len(headers3) + 1):
+        ws3.append([ct["type"], ct["spend"], ct["sales"], ct["orders"],
+                    ct["acos"], ct["cvr"], ct["cpc"], assessment])
+        for col in range(1, len(h3) + 1):
             ws3.cell(row=i, column=col).border = BORDER
-        fill = acos_fill(ct["acos"])
-        if fill:
-            ws3.cell(row=i, column=5).fill = fill
+        f = acos_fill(ct["acos"])
+        if f:
+            ws3.cell(row=i, column=5).fill = f
     autofit(ws3)
 
-    # ── Sheet 4: Top Performers ───────────────────────────────────────────────
+    # Sheet 4: Top Performers
     ws4 = wb.create_sheet("Top Performers")
-    headers4 = ["Campaign", "Spend", "Sales", "Orders", "ACOS %", "CVR %", "Action"]
-    style_header(ws4, 1, headers4)
+    h4 = ["Campaign", "Spend", "Sales", "Orders", "ACOS %", "CVR %", "Action"]
+    style_header(ws4, 1, h4)
     for i, p in enumerate(data["top_performers"], 2):
-        if p["acos"] < 15:
-            action = "Scale 3x"
-        elif p["acos"] < 25:
-            action = "Scale 2x"
-        else:
-            action = "Scale 1.5x"
-        row = [p["campaign"], p["spend"], p["sales"], p["orders"], p["acos"], p["cvr"], action]
-        ws4.append(row)
-        for col in range(1, len(headers4) + 1):
+        action = "Scale 3x" if p["acos"] < 15 else "Scale 2x" if p["acos"] < 25 else "Scale 1.5x"
+        ws4.append([p["campaign"], p["spend"], p["sales"], p["orders"], p["acos"], p["cvr"], action])
+        for col in range(1, len(h4) + 1):
             ws4.cell(row=i, column=col).border = BORDER
-        fill = acos_fill(p["acos"])
-        if fill:
-            ws4.cell(row=i, column=5).fill = fill
+        f = acos_fill(p["acos"])
+        if f:
+            ws4.cell(row=i, column=5).fill = f
         ws4.cell(row=i, column=7).font = Font(bold=True, color="2E5C55")
     autofit(ws4)
 
-    # ── Sheet 5: Wasted Spend ─────────────────────────────────────────────────
+    # Sheet 5: Wasted Spend
     ws5 = wb.create_sheet("Wasted Spend")
     total_wasted = sum(w["spend"] for w in data["wasted_spend"])
     ws5.append(["Campaigns with spend > $5 and ZERO sales — pause immediately"])
     ws5["A1"].font = Font(bold=True, color="CF4043")
-    ws5.append([f"Total wasted: ${total_wasted:,.2f}"])
+    ws5.append(["Total wasted: ${:,.2f}".format(total_wasted)])
     ws5.append([])
-    headers5 = ["Campaign", "Spend", "Clicks", "Action"]
-    style_header(ws5, 4, headers5)
+    h5 = ["Campaign", "Spend", "Clicks", "Action"]
+    style_header(ws5, 4, h5)
     for i, w in enumerate(data["wasted_spend"], 5):
         ws5.append([w["campaign"], w["spend"], w["clicks"], "PAUSE"])
         for col in range(1, 5):
@@ -353,17 +341,17 @@ def build_excel(data):
     autofit(ws5)
     ws5.column_dimensions["A"].width = 60
 
-    # ── Sheet 6: Daily Trends ─────────────────────────────────────────────────
+    # Sheet 6: Daily Trends
     ws6 = wb.create_sheet("Daily Trends")
-    headers6 = ["Date", "Spend", "Sales", "Orders", "ACOS %"]
-    style_header(ws6, 1, headers6)
+    h6 = ["Date", "Spend", "Sales", "Orders", "ACOS %"]
+    style_header(ws6, 1, h6)
     for i, d in enumerate(data["daily_trends"], 2):
         ws6.append([d["date"], d["spend"], d["sales"], d["orders"], d["acos"]])
         for col in range(1, 6):
             ws6.cell(row=i, column=col).border = BORDER
-        fill = acos_fill(d["acos"])
-        if fill:
-            ws6.cell(row=i, column=5).fill = fill
+        f = acos_fill(d["acos"])
+        if f:
+            ws6.cell(row=i, column=5).fill = f
     autofit(ws6)
 
     out = io.BytesIO()
@@ -371,44 +359,7 @@ def build_excel(data):
     return out.getvalue()
 
 
-# ── Multipart parser (no cgi module — removed in Python 3.12) ────────────────
-
-def _parse_multipart_file(body: bytes, content_type: str) -> bytes | None:
-    """Extract the first file field from a multipart/form-data body."""
-    m = re.search(r'boundary=([^\s;]+)', content_type)
-    if not m:
-        return None
-    boundary = m.group(1).strip('"').encode()
-
-    # Split on boundary markers
-    delimiter = b'--' + boundary
-    parts = body.split(delimiter)
-
-    for part in parts[1:]:
-        if part.startswith(b'--'):   # final boundary
-            break
-        # Separate headers and body
-        if b'\r\n\r\n' in part:
-            raw_headers, payload = part.split(b'\r\n\r\n', 1)
-        elif b'\n\n' in part:
-            raw_headers, payload = part.split(b'\n\n', 1)
-        else:
-            continue
-
-        headers_str = raw_headers.decode('utf-8', errors='replace')
-        # Only take fields that look like file uploads
-        if 'name="file"' not in headers_str and "name='file'" not in headers_str:
-            continue
-
-        # Strip trailing CRLF added by multipart framing
-        if payload.endswith(b'\r\n'):
-            payload = payload[:-2]
-        return payload
-
-    return None
-
-
-# ── Vercel handler ────────────────────────────────────────────────────────────
+# ── Flask routes ──────────────────────────────────────────────────────────────
 
 CORS_HEADERS = {
     "Access-Control-Allow-Origin":  "*",
@@ -417,57 +368,42 @@ CORS_HEADERS = {
 }
 
 
-class handler(BaseHTTPRequestHandler):
+@app.route("/api/analyze", methods=["OPTIONS"])
+def options():
+    return Response("", status=200, headers=CORS_HEADERS)
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        for k, v in CORS_HEADERS.items():
-            self.send_header(k, v)
-        self.end_headers()
 
-    def do_POST(self):
-        try:
-            content_type = self.headers.get("Content-Type", "")
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length)
+@app.route("/api/analyze", methods=["POST"])
+def analyze_endpoint():
+    try:
+        if "file" not in request.files:
+            return _error(400, "Поле 'file' не найдено в запросе.")
 
-            # Parse multipart (works in all Python versions)
-            file_bytes = _parse_multipart_file(body, content_type)
-            if file_bytes is None:
-                self._error(400, "Поле 'file' не найдено в запросе.")
-                return
-            if not file_bytes:
-                self._error(400, "Файл пустой.")
-                return
+        file = request.files["file"]
+        file_bytes = file.read()
+        if not file_bytes:
+            return _error(400, "Файл пустой.")
 
-            data = analyze(file_bytes)
-            xlsx = build_excel(data)
+        data = analyze(file_bytes)
+        xlsx = build_excel(data)
 
-            self.send_response(200)
-            for k, v in CORS_HEADERS.items():
-                self.send_header(k, v)
-            self.send_header("Content-Type",
-                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            self.send_header("Content-Disposition",
-                             "attachment; filename=\"ppc-analysis.xlsx\"")
-            self.send_header("Content-Length", str(len(xlsx)))
-            self.end_headers()
-            self.wfile.write(xlsx)
+        headers = dict(CORS_HEADERS)
+        headers["Content-Disposition"] = 'attachment; filename="ppc-analysis.xlsx"'
+        return Response(
+            xlsx,
+            status=200,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers=headers,
+        )
 
-        except ValueError as e:
-            self._error(400, str(e))
-        except Exception as e:
-            self._error(500, f"Внутренняя ошибка: {e}")
+    except ValueError as e:
+        return _error(400, str(e))
+    except Exception as e:
+        return _error(500, "Внутренняя ошибка: {}".format(str(e)))
 
-    def _error(self, code, message):
-        body = json.dumps({"error": message}).encode()
-        self.send_response(code)
-        for k, v in CORS_HEADERS.items():
-            self.send_header(k, v)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def log_message(self, *args):
-        pass  # suppress default Vercel logs
+def _error(code, message):
+    body = json.dumps({"error": message})
+    headers = dict(CORS_HEADERS)
+    headers["Content-Type"] = "application/json"
+    return Response(body, status=code, headers=headers)
