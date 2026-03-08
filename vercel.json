@@ -1,14 +1,7 @@
 {
-  "builds": [
-    {
-      "src": "api/analyze.py",
-      "use": "@vercel/python"
+  "functions": {
+    "api/analyze.py": {
+      "maxDuration": 30
     }
-  ],
-  "routes": [
-    {
-      "src": "/api/analyze",
-      "dest": "/api/analyze.py"
-    }
-  ]
+  }
 }

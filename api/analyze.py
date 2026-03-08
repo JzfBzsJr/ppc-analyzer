@@ -368,13 +368,21 @@ CORS_HEADERS = {
 }
 
 
-@app.route("/api/analyze", methods=["OPTIONS"])
-def options():
-    return Response("", status=200, headers=CORS_HEADERS)
-
-
-@app.route("/api/analyze", methods=["POST"])
+@app.route("/", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/analyze", methods=["GET", "POST", "OPTIONS"])
 def analyze_endpoint():
+    if request.method == "OPTIONS":
+        return Response("", status=200, headers=CORS_HEADERS)
+
+    if request.method == "GET":
+        return Response(
+            json.dumps({"status": "ok", "message": "PPC Analyzer is running. Send POST with file field."}),
+            status=200,
+            mimetype="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    # POST
     try:
         if "file" not in request.files:
             return _error(400, "Поле 'file' не найдено в запросе.")
