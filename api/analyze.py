@@ -1,7 +1,7 @@
 from http.server import BaseHTTPRequestHandler
 import io
 import json
-import cgi
+import re
 import pandas as pd
 import numpy as np
 import openpyxl
@@ -371,6 +371,43 @@ def build_excel(data):
     return out.getvalue()
 
 
+# ── Multipart parser (no cgi module — removed in Python 3.12) ────────────────
+
+def _parse_multipart_file(body: bytes, content_type: str) -> bytes | None:
+    """Extract the first file field from a multipart/form-data body."""
+    m = re.search(r'boundary=([^\s;]+)', content_type)
+    if not m:
+        return None
+    boundary = m.group(1).strip('"').encode()
+
+    # Split on boundary markers
+    delimiter = b'--' + boundary
+    parts = body.split(delimiter)
+
+    for part in parts[1:]:
+        if part.startswith(b'--'):   # final boundary
+            break
+        # Separate headers and body
+        if b'\r\n\r\n' in part:
+            raw_headers, payload = part.split(b'\r\n\r\n', 1)
+        elif b'\n\n' in part:
+            raw_headers, payload = part.split(b'\n\n', 1)
+        else:
+            continue
+
+        headers_str = raw_headers.decode('utf-8', errors='replace')
+        # Only take fields that look like file uploads
+        if 'name="file"' not in headers_str and "name='file'" not in headers_str:
+            continue
+
+        # Strip trailing CRLF added by multipart framing
+        if payload.endswith(b'\r\n'):
+            payload = payload[:-2]
+        return payload
+
+    return None
+
+
 # ── Vercel handler ────────────────────────────────────────────────────────────
 
 CORS_HEADERS = {
@@ -394,23 +431,11 @@ class handler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
 
-            # Parse multipart
-            environ = {
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE":   content_type,
-                "CONTENT_LENGTH": str(content_length),
-            }
-            fs = cgi.FieldStorage(
-                fp=io.BytesIO(body),
-                environ=environ,
-                keep_blank_values=True,
-            )
-
-            if "file" not in fs:
+            # Parse multipart (works in all Python versions)
+            file_bytes = _parse_multipart_file(body, content_type)
+            if file_bytes is None:
                 self._error(400, "Поле 'file' не найдено в запросе.")
                 return
-
-            file_bytes = fs["file"].file.read()
             if not file_bytes:
                 self._error(400, "Файл пустой.")
                 return
