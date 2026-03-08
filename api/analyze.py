@@ -352,25 +352,45 @@ def build_excel(data):
 
     # Sheet 2: Products / Keywords (label adapts to report type)
     rtype = data.get("report_type", "unknown")
-    sheet2_name = "Keywords" if rtype == "search_term" else "Products"
-    col1_label  = "Search Term" if rtype == "search_term" else "ASIN"
-    col2_label  = "Search Term" if rtype == "search_term" else "SKU"
+    is_search_term = (rtype == "search_term")
+    sheet2_name = "Keywords" if is_search_term else "Products"
     ws2 = wb.create_sheet(sheet2_name)
-    h2 = [col1_label, col2_label, "Spend", "Sales", "Orders", "Impressions",
-          "Clicks", "ACOS %", "ROAS", "CTR %", "CVR %", "CPC"]
-    style_header(ws2, 1, h2)
-    for i, p in enumerate(sorted(data["products"], key=lambda x: x["spend"], reverse=True), 2):
-        ws2.append([p["asin"], p["sku"], p["spend"], p["sales"], p["orders"],
-                    p["impressions"], p["clicks"], p["acos"], p["roas"],
-                    p["ctr"], p["cvr"], p["cpc"]])
-        for col in range(1, len(h2) + 1):
-            ws2.cell(row=i, column=col).border = BORDER
-        f = acos_fill(p["acos"])
-        if f:
-            ws2.cell(row=i, column=8).fill = f
-        f2 = cvr_fill(p["cvr"])
-        if f2:
-            ws2.cell(row=i, column=11).fill = f2
+
+    if is_search_term:
+        # Single "Search Term" column — no duplicate
+        h2 = ["Search Term", "Spend", "Sales", "Orders", "Impressions",
+              "Clicks", "ACOS %", "ROAS", "CTR %", "CVR %", "CPC"]
+        style_header(ws2, 1, h2)
+        for i, p in enumerate(sorted(data["products"], key=lambda x: x["spend"], reverse=True), 2):
+            ws2.append([p["asin"], p["spend"], p["sales"], p["orders"],
+                        p["impressions"], p["clicks"], p["acos"], p["roas"],
+                        p["ctr"], p["cvr"], p["cpc"]])
+            for col in range(1, len(h2) + 1):
+                ws2.cell(row=i, column=col).border = BORDER
+            f = acos_fill(p["acos"])
+            if f:
+                ws2.cell(row=i, column=7).fill = f
+            f2 = cvr_fill(p["cvr"])
+            if f2:
+                ws2.cell(row=i, column=10).fill = f2
+    else:
+        # ASIN + SKU columns for Advertised Product report
+        h2 = ["ASIN", "SKU", "Spend", "Sales", "Orders", "Impressions",
+              "Clicks", "ACOS %", "ROAS", "CTR %", "CVR %", "CPC"]
+        style_header(ws2, 1, h2)
+        for i, p in enumerate(sorted(data["products"], key=lambda x: x["spend"], reverse=True), 2):
+            ws2.append([p["asin"], p["sku"], p["spend"], p["sales"], p["orders"],
+                        p["impressions"], p["clicks"], p["acos"], p["roas"],
+                        p["ctr"], p["cvr"], p["cpc"]])
+            for col in range(1, len(h2) + 1):
+                ws2.cell(row=i, column=col).border = BORDER
+            f = acos_fill(p["acos"])
+            if f:
+                ws2.cell(row=i, column=8).fill = f
+            f2 = cvr_fill(p["cvr"])
+            if f2:
+                ws2.cell(row=i, column=11).fill = f2
+
     autofit(ws2)
     add_autofilter(ws2)
 
