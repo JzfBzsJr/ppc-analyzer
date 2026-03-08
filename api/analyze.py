@@ -93,13 +93,21 @@ def analyze(file_bytes):
     df["Impressions"] = pd.to_numeric(df["Impressions"], errors="coerce").fillna(0)
     df["Clicks"] = pd.to_numeric(df["Clicks"], errors="coerce").fillna(0)
 
-    # Date range — optional column
-    has_date = "Date" in df.columns
+    # Date range — handle "Date", "Start Date", or "End Date" column names
+    if "Date" in df.columns:
+        df["_date"] = pd.to_datetime(df["Date"], errors="coerce")
+    elif "Start Date" in df.columns:
+        df["_date"] = pd.to_datetime(df["Start Date"], errors="coerce")
+    elif "End Date" in df.columns:
+        df["_date"] = pd.to_datetime(df["End Date"], errors="coerce")
+    else:
+        df["_date"] = pd.NaT
+
+    has_date = not df["_date"].isna().all()
     if has_date:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        date_start = str(df["Date"].min().date()) if not df["Date"].isna().all() else "N/A"
-        date_end   = str(df["Date"].max().date()) if not df["Date"].isna().all() else "N/A"
-        days = (df["Date"].max() - df["Date"].min()).days + 1 if not df["Date"].isna().all() else 0
+        date_start = str(df["_date"].min().date())
+        date_end   = str(df["_date"].max().date())
+        days       = (df["_date"].max() - df["_date"].min()).days + 1
     else:
         date_start, date_end, days = "N/A", "N/A", 0
 
@@ -222,16 +230,16 @@ def analyze(file_bytes):
             "clicks":   int(r["Clicks"]),
         })
 
-    # Daily trends (only if Date column exists)
+    # Daily trends (uses _date column)
     daily_trends = []
-    if has_date and not df["Date"].isna().all():
-        daily = df.groupby("Date").agg({
+    if has_date:
+        daily = df.groupby("_date").agg({
             "Impressions": "sum", "Clicks": "sum", "Spend": "sum",
             "7 Day Total Sales": "sum", "7 Day Total Orders (#)": "sum"
         }).reset_index()
         for _, r in daily.iterrows():
             daily_trends.append({
-                "date":   str(r["Date"].date()),
+                "date":   str(r["_date"].date()),
                 "spend":  round(r["Spend"], 2),
                 "sales":  round(r["7 Day Total Sales"], 2),
                 "orders": int(r["7 Day Total Orders (#)"]),
