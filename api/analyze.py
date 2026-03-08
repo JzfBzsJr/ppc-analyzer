@@ -140,9 +140,6 @@ def analyze(file_bytes):
 
     # Products / Keywords — adapt grouping to report type
     agg_cols = ["Impressions", "Clicks", "Spend", "7 Day Total Sales", "7 Day Total Orders (#)"]
-    for col in ["7 Day Advertised SKU Sales", "7 Day Other SKU Sales"]:
-        if col in df.columns:
-            agg_cols.append(col)
 
     if report_type == "advertised_product" and "Advertised ASIN" in df.columns:
         group_keys = ["Advertised ASIN", "Advertised SKU"]
@@ -159,7 +156,6 @@ def analyze(file_bytes):
     products = []
     for _, r in perf.iterrows():
         if r["Spend"] > 0:
-            halo = round(float(r.get("7 Day Other SKU Sales", 0)), 2)
             key_a = r.get(group_keys[0], "")
             key_b = r.get(group_keys[-1], key_a)
             products.append({
@@ -175,7 +171,6 @@ def analyze(file_bytes):
                 "ctr":         round(safe_div(r["Clicks"], r["Impressions"]) * 100, 2),
                 "cvr":         round(safe_div(r["7 Day Total Orders (#)"], r["Clicks"]) * 100, 2),
                 "cpc":         round(safe_div(r["Spend"], r["Clicks"]), 2),
-                "halo_sales":  halo,
             })
 
     # Campaign types
@@ -302,6 +297,17 @@ def autofit(ws):
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 55)
 
 
+def add_autofilter(ws, header_row=1):
+    """Add Excel AutoFilter to the header row."""
+    max_col = ws.max_column
+    max_row = ws.max_row
+    if max_col and max_row > header_row:
+        ws.auto_filter.ref = "{}{}:{}{}".format(
+            get_column_letter(1), header_row,
+            get_column_letter(max_col), max_row
+        )
+
+
 def build_excel(data):
     wb = openpyxl.Workbook()
     o = data["overall"]
@@ -351,12 +357,12 @@ def build_excel(data):
     col2_label  = "Search Term" if rtype == "search_term" else "SKU"
     ws2 = wb.create_sheet(sheet2_name)
     h2 = [col1_label, col2_label, "Spend", "Sales", "Orders", "Impressions",
-          "Clicks", "ACOS %", "ROAS", "CTR %", "CVR %", "CPC", "Halo Sales"]
+          "Clicks", "ACOS %", "ROAS", "CTR %", "CVR %", "CPC"]
     style_header(ws2, 1, h2)
     for i, p in enumerate(sorted(data["products"], key=lambda x: x["spend"], reverse=True), 2):
         ws2.append([p["asin"], p["sku"], p["spend"], p["sales"], p["orders"],
                     p["impressions"], p["clicks"], p["acos"], p["roas"],
-                    p["ctr"], p["cvr"], p["cpc"], p["halo_sales"]])
+                    p["ctr"], p["cvr"], p["cpc"]])
         for col in range(1, len(h2) + 1):
             ws2.cell(row=i, column=col).border = BORDER
         f = acos_fill(p["acos"])
@@ -366,6 +372,7 @@ def build_excel(data):
         if f2:
             ws2.cell(row=i, column=11).fill = f2
     autofit(ws2)
+    add_autofilter(ws2)
 
     # Sheet 3: Campaign Types
     ws3 = wb.create_sheet("Campaign Types")
@@ -388,6 +395,7 @@ def build_excel(data):
         if f:
             ws3.cell(row=i, column=5).fill = f
     autofit(ws3)
+    add_autofilter(ws3)
 
     # Sheet 4: Top Performers
     ws4 = wb.create_sheet("Top Performers")
@@ -403,6 +411,7 @@ def build_excel(data):
             ws4.cell(row=i, column=5).fill = f
         ws4.cell(row=i, column=7).font = Font(bold=True, color="2E5C55")
     autofit(ws4)
+    add_autofilter(ws4)
 
     # Sheet 5: Wasted Spend
     ws5 = wb.create_sheet("Wasted Spend")
@@ -420,6 +429,7 @@ def build_excel(data):
         ws5.cell(row=i, column=2).fill = RED
         ws5.cell(row=i, column=4).font = Font(bold=True, color="CF4043")
     autofit(ws5)
+    add_autofilter(ws5, header_row=4)
     ws5.column_dimensions["A"].width = 60
 
     # Sheet 6: Daily Trends
@@ -434,6 +444,7 @@ def build_excel(data):
         if f:
             ws6.cell(row=i, column=5).fill = f
     autofit(ws6)
+    add_autofilter(ws6)
 
     out = io.BytesIO()
     wb.save(out)
