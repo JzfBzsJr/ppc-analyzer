@@ -218,6 +218,14 @@ def _classify_bleeder(clicks: int, spend: float, threshold_spend: float | None) 
 
 # ── Decision logic ──────────────────────────────────────────────────────
 
+def _format_subordinate_list(subs: list[dict]) -> str:
+    lines = []
+    for s in subs:
+        tag = " (winner)" if s["is_winner"] else f" ({s['clicks']} clicks, 0 sales)"
+        lines.append(f"  - [{s['match']}] {s['campaign']}{tag}")
+    return "\n".join(lines) if lines else "  (других source-кампаний нет — единственный)"
+
+
 def _winner_decision(row: dict, target_acos: float = TARGET_ACOS_DEFAULT) -> tuple[str, str]:
     match = row.get("match", "")
     target_type = row.get("target_type", "")
@@ -237,15 +245,41 @@ def _winner_decision(row: dict, target_acos: float = TARGET_ACOS_DEFAULT) -> tup
         if match == "AUTO":
             return "lower_bid_auto_minus3", f"ACOS {acos*100:.1f}% > {high*100:.0f}%, AUTO step −3%"
 
+    if row.get("skc_role") == "subordinate":
+        return "cross_negate_for_skc", (
+            f"Term '{row['term']}' имеет SKC migration primary в кампании "
+            f"'{row.get('skc_primary_campaign', '')}'. Cross-negate как Negative Exact "
+            f"в этой {match}-кампании, чтобы трафик ушёл в новый SKC."
+        )
+
+    if row.get("pt_role") == "subordinate":
+        return "cross_negate_for_pt", (
+            f"ASIN-target '{row['term']}' имеет PT migration primary в кампании "
+            f"'{row.get('pt_primary_campaign', '')}'. Cross-negate как Negative ASIN "
+            f"в этой кампании, чтобы трафик ушёл в новую PT."
+        )
+
     if match in ("AUTO", "BROAD", "PHRASE") and acos < target_acos and clicks >= 5:
-        # Спец-случай: тот же term уже работает Exact-ом для этого товара.
-        # Создавать новую SKC бессмысленно — будут конкурировать. Cross-negate.
         if target_type == "KEYWORD" and row.get("exact_exists_for_same_product"):
             return "add_negative_exact_in_source", (
                 f"KW-winner ACOS {acos*100:.1f}% CVR {cvr*100:.0f}% {clicks} clicks, "
                 f"но Exact для этого term уже работает в этом товаре. "
                 f"Не создавай новый SKC — добавь в Negative Exact в эту "
                 f"{match}-кампанию, чтобы трафик шёл в существующий Exact."
+            )
+        if target_type == "ASIN" and row.get("pt_role") == "primary":
+            subs = row.get("pt_subordinate_sources", [])
+            return "create_pt_campaign", (
+                f"ASIN-winner ACOS {acos*100:.1f}% CVR {cvr*100:.0f}% {clicks} clicks "
+                f"→ создать отдельную PT кампанию. Negative ASIN добавить в эти "
+                f"{len(subs)} source-кампании:\n{_format_subordinate_list(subs)}"
+            )
+        if target_type == "KEYWORD" and row.get("skc_role") == "primary":
+            subs = row.get("skc_subordinate_sources", [])
+            return "migrate_to_skc_exact", (
+                f"KW-winner ACOS {acos*100:.1f}% CVR {cvr*100:.0f}% {clicks} clicks "
+                f"→ создать SKC Exact. Negative Exact добавить в эти "
+                f"{len(subs)} source-кампании:\n{_format_subordinate_list(subs)}"
             )
         if target_type == "ASIN":
             return "create_pt_campaign", (
@@ -272,6 +306,25 @@ def _bleeder_decision(row: dict) -> tuple[str, str]:
     conflict = bool(row.get("cross_campaign_winner"))
     clicks = int(row.get("clicks") or 0)
     cpc = float(row.get("cpc") or 0)
+
+    # SKC subordinate (KW bleeder term-а у которого есть SKC migration primary)
+    if row.get("skc_subordinate"):
+        return "cross_negate_for_skc", (
+            f"Term '{row['term']}' имеет SKC migration primary в кампании "
+            f"'{row.get('skc_primary_campaign', '')}'. "
+            f"Эта запись: {clicks} clicks, ${row.get('spend', 0):.2f} spend, 0 sales. "
+            f"Cross-negate как Negative Exact в эту {row.get('match', '')}-кампанию "
+            f"как часть consolidation в новый SKC."
+        )
+
+    # PT subordinate (ASIN bleeder для ASIN-target с PT migration primary)
+    if row.get("pt_subordinate"):
+        return "cross_negate_for_pt", (
+            f"ASIN-target '{row['term']}' имеет PT migration primary в кампании "
+            f"'{row.get('pt_primary_campaign', '')}'. "
+            f"Эта запись: {clicks} clicks, ${row.get('spend', 0):.2f} spend, 0 sales. "
+            f"Cross-negate как Negative ASIN как часть consolidation в новую PT."
+        )
 
     if conflict and target_type == "ASIN":
         return "variation_conflict_review", (
@@ -515,6 +568,107 @@ def analyze_bytes(file_bytes: bytes, filename: str) -> dict:
             key = (b["term"], b["product_label"])
             sibling_winners = winner_lookup.get(key, [])
             b["cross_campaign_winner"] = bool(sibling_winners)
+
+    # ── Primary/Subordinate roll-up для SKC и PT migration ──
+    # Один search term может встречаться в нескольких source-кампаниях. Чтобы пользователь
+    # получил ОДНУ рекомендацию по term-у, выбираем primary row (лучший winner) — все
+    # остальные строки этого term становятся subordinate с decision="cross_negate_for_skc"
+    # (или _for_pt). Это устраняет противоречивые рекомендации на одном keyword.
+    def _row_id(r):
+        return (r["term"], r["match"], r["asin"], r["campaign"],
+                r["ad_group"], r["targeting"])
+
+    skc_candidates: dict[tuple, list[dict]] = {}
+    pt_candidates: dict[tuple, list[dict]] = {}
+    for w in winners:
+        if (w["match"] in ("AUTO", "BROAD", "PHRASE")
+                and w["acos"] < TARGET_ACOS_DEFAULT
+                and w["clicks"] >= 5):
+            key = (w["term"], w["product_label"])
+            if w["target_type"] == "KEYWORD" and not w["exact_exists_for_same_product"]:
+                skc_candidates.setdefault(key, []).append(w)
+            elif w["target_type"] == "ASIN":
+                pt_candidates.setdefault(key, []).append(w)
+
+    skc_primary_id: dict[tuple, tuple] = {}
+    pt_primary_id: dict[tuple, tuple] = {}
+    for key, rows in skc_candidates.items():
+        primary = max(rows, key=lambda r: (r["orders"], r["clicks"]))
+        skc_primary_id[key] = _row_id(primary)
+    for key, rows in pt_candidates.items():
+        primary = max(rows, key=lambda r: (r["orders"], r["clicks"]))
+        pt_primary_id[key] = _row_id(primary)
+
+    skc_subordinates: dict[tuple, list[dict]] = {}
+    pt_subordinates: dict[tuple, list[dict]] = {}
+
+    def _make_sub_info(row, is_winner):
+        return {
+            "campaign": row["campaign"],
+            "match": row["match"],
+            "clicks": row["clicks"],
+            "orders": row["orders"] if is_winner else 0,
+            "is_winner": is_winner,
+        }
+
+    for w in winners:
+        key = (w["term"], w["product_label"])
+        rid = _row_id(w)
+        if key in skc_primary_id:
+            if rid == skc_primary_id[key]:
+                w["skc_role"] = "primary"
+            else:
+                w["skc_role"] = "subordinate"
+                w["skc_primary_campaign"] = next(
+                    (r["campaign"] for r in skc_candidates[key] if _row_id(r) == skc_primary_id[key]),
+                    "",
+                )
+                skc_subordinates.setdefault(skc_primary_id[key], []).append(_make_sub_info(w, is_winner=True))
+        else:
+            w["skc_role"] = None
+        if key in pt_primary_id:
+            if rid == pt_primary_id[key]:
+                w["pt_role"] = "primary"
+            else:
+                w["pt_role"] = "subordinate"
+                w["pt_primary_campaign"] = next(
+                    (r["campaign"] for r in pt_candidates[key] if _row_id(r) == pt_primary_id[key]),
+                    "",
+                )
+                pt_subordinates.setdefault(pt_primary_id[key], []).append(_make_sub_info(w, is_winner=True))
+        else:
+            w["pt_role"] = None
+
+    for tier_name in ("tier_high_clicks", "tier_gray_zone", "tier_low_data"):
+        for b in bleeders[tier_name]:
+            key = (b["term"], b["product_label"])
+            if b["target_type"] == "KEYWORD" and key in skc_primary_id:
+                b["skc_subordinate"] = True
+                primary_id = skc_primary_id[key]
+                b["skc_primary_campaign"] = next(
+                    (r["campaign"] for r in skc_candidates[key] if _row_id(r) == primary_id),
+                    "",
+                )
+                skc_subordinates.setdefault(primary_id, []).append(_make_sub_info(b, is_winner=False))
+            else:
+                b["skc_subordinate"] = False
+            if b["target_type"] == "ASIN" and key in pt_primary_id:
+                b["pt_subordinate"] = True
+                primary_id = pt_primary_id[key]
+                b["pt_primary_campaign"] = next(
+                    (r["campaign"] for r in pt_candidates[key] if _row_id(r) == primary_id),
+                    "",
+                )
+                pt_subordinates.setdefault(primary_id, []).append(_make_sub_info(b, is_winner=False))
+            else:
+                b["pt_subordinate"] = False
+
+    for w in winners:
+        rid = _row_id(w)
+        if w.get("skc_role") == "primary":
+            w["skc_subordinate_sources"] = skc_subordinates.get(rid, [])
+        if w.get("pt_role") == "primary":
+            w["pt_subordinate_sources"] = pt_subordinates.get(rid, [])
 
     # Products
     label_to_asins: dict[str, list[str]] = {}
