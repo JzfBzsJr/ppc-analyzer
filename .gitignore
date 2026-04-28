@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Vercel
+.vercel/
+
+# Claude Code per-project settings — содержит локальные пути и токены, никогда не коммитим
+.claude/
+
+# Local data — never commit user reports
+*.xlsx
+*.csv
+!examples/*.xlsx
+
+# Logs
+*.log

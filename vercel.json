@@ -1,7 +1,11 @@
 {
   "functions": {
     "api/analyze.py": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "memory": 1024
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/api/analyze", "destination": "/api/analyze.py" }
+  ]
 }

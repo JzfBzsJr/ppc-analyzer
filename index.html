@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amazon PPC Analyzer</title>
+<style>
+  :root {
+    --accent: #ff9900;
+    --bg: #fafafa;
+    --card: #ffffff;
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --border: #e5e5e7;
+    --success: #34c759;
+    --warning: #ff9500;
+    --danger: #ff3b30;
+    --info: #007aff;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  .container {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+
+  h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    margin: 0 0 8px;
+    letter-spacing: -0.02em;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 1.05rem;
+    margin: 0 0 32px;
+  }
+
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    background: var(--card);
+    padding: 60px 20px;
+    text-align: center;
+    transition: all 0.2s;
+    cursor: pointer;
+  }
+
+  .dropzone.dragover {
+    border-color: var(--accent);
+    background: #fff8ed;
+  }
+
+  .dropzone.processing {
+    pointer-events: none;
+    opacity: 0.6;
+  }
+
+  .dropzone-icon {
+    font-size: 3rem;
+    margin-bottom: 12px;
+  }
+
+  .dropzone-text {
+    font-size: 1.1rem;
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+
+  .dropzone-hint {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .dropzone input[type="file"] {
+    display: none;
+  }
+
+  .browse-link {
+    color: var(--info);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .status {
+    margin-top: 20px;
+    padding: 16px 20px;
+    border-radius: 12px;
+    font-weight: 500;
+    display: none;
+  }
+
+  .status.show { display: block; }
+  .status.processing { background: #e8f1ff; color: var(--info); }
+  .status.error { background: #ffe5e3; color: var(--danger); }
+
+  .results {
+    margin-top: 32px;
+    display: none;
+  }
+
+  .results.show { display: block; }
+
+  .download-btn {
+    display: inline-block;
+    background: var(--accent);
+    color: white;
+    padding: 14px 28px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 1rem;
+    text-decoration: none;
+    margin-bottom: 32px;
+    transition: opacity 0.2s;
+  }
+
+  .download-btn:hover { opacity: 0.9; }
+
+  .section {
+    background: var(--card);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+  }
+
+  .section h2 {
+    font-size: 1.3rem;
+    margin: 0 0 16px;
+    font-weight: 600;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 16px;
+  }
+
+  .stat {
+    padding: 12px 0;
+  }
+
+  .stat-label {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-bottom: 4px;
+  }
+
+  .stat-value {
+    font-size: 1.3rem;
+    font-weight: 600;
+  }
+
+  .stat-value.warning { color: var(--warning); }
+  .stat-value.danger { color: var(--danger); }
+  .stat-value.success { color: var(--success); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+
+  th {
+    text-align: left;
+    padding: 10px 12px;
+    background: #f5f5f7;
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  td.right, th.right { text-align: right; }
+  td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+  td.truncate {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .pill.kw { background: #e8f1ff; color: var(--info); }
+  .pill.asin { background: #fff4e5; color: var(--warning); }
+
+  .decision-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .decision-row:last-child { border-bottom: none; }
+  .decision-name { font-family: ui-monospace, monospace; font-size: 0.85rem; }
+  .decision-count { font-weight: 600; }
+
+  footer {
+    margin-top: 40px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <h1>Amazon PPC Analyzer</h1>
+  <p class="subtitle">
+    Перетащи Sponsored Products Search Term Report — получи готовый план действий по каждому search term.
+  </p>
+
+  <div class="dropzone" id="dropzone">
+    <div class="dropzone-icon">📊</div>
+    <div class="dropzone-text">Перетащи xlsx или csv сюда</div>
+    <div class="dropzone-hint">или <span class="browse-link" id="browseLink">выбери файл</span></div>
+    <input type="file" id="fileInput" accept=".xlsx,.csv">
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <div class="results" id="results">
+    <a class="download-btn" id="downloadBtn" href="#" download>⬇️ Скачать decisions.csv</a>
+
+    <div class="section" id="metaSection"></div>
+    <div class="section" id="overallSection"></div>
+    <div class="section" id="productsSection"></div>
+    <div class="section" id="decisionsSection"></div>
+    <div class="section" id="bleedersHighSection"></div>
+  </div>
+
+  <footer>
+    Pure web tool — данные обрабатываются на лету, ничего не сохраняется на сервере.<br>
+    Лимит файла: 4 MB. Большие отчёты — сократи период.
+  </footer>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const browseLink = document.getElementById('browseLink');
+const statusEl = document.getElementById('status');
+const results = document.getElementById('results');
+const downloadBtn = document.getElementById('downloadBtn');
+
+// Drag & drop
+['dragenter', 'dragover'].forEach(evt =>
+  dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.add('dragover'); }));
+['dragleave', 'drop'].forEach(evt =>
+  dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.remove('dragover'); }));
+
+dropzone.addEventListener('drop', e => {
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+dropzone.addEventListener('click', () => fileInput.click());
+browseLink.addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length) handleFile(e.target.files[0]);
+});
+
+function showStatus(text, kind) {
+  statusEl.className = 'status show ' + kind;
+  statusEl.textContent = text;
+}
+
+function hideStatus() {
+  statusEl.className = 'status';
+  statusEl.textContent = '';
+}
+
+async function handleFile(file) {
+  // Sanity checks
+  const ext = file.name.toLowerCase().split('.').pop();
+  if (!['xlsx', 'csv'].includes(ext)) {
+    showStatus('Файл должен быть .xlsx или .csv (получен .' + ext + ')', 'error');
+    return;
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    showStatus(`Файл ${(file.size / 1024 / 1024).toFixed(1)} MB — больше лимита 4 MB. Сократи период отчёта.`, 'error');
+    return;
+  }
+
+  results.classList.remove('show');
+  dropzone.classList.add('processing');
+  showStatus('Анализирую файл…', 'processing');
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const response = await fetch('/api/analyze', { method: 'POST', body: formData });
+    const data = await response.json();
+
+    if (!response.ok) {
+      showStatus('Ошибка: ' + (data.error || response.statusText), 'error');
+      return;
+    }
+
+    hideStatus();
+    renderResults(data);
+  } catch (err) {
+    showStatus('Сетевая ошибка: ' + err.message, 'error');
+  } finally {
+    dropzone.classList.remove('processing');
+  }
+}
+
+function fmtMoney(v, currency = 'USD') {
+  const sign = currency === 'USD' ? '$' : '';
+  return sign + (v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtInt(v) {
+  return (v || 0).toLocaleString('en-US');
+}
+
+function fmtPct(v) {
+  return ((v || 0) * 100).toFixed(2) + '%';
+}
+
+function renderResults(data) {
+  const { summary, csv_content, filename } = data;
+
+  // Download button
+  const blob = new Blob([csv_content], { type: 'text/csv;charset=utf-8' });
+  downloadBtn.href = URL.createObjectURL(blob);
+  downloadBtn.download = filename;
+
+  const c = summary.meta.currency;
+
+  // Meta section
+  document.getElementById('metaSection').innerHTML = `
+    <h2>📅 Период и охват</h2>
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-label">Период</div><div class="stat-value" style="font-size:1rem">${summary.meta.date_range[0]} → ${summary.meta.date_range[1]}</div></div>
+      <div class="stat"><div class="stat-label">Кампаний</div><div class="stat-value">${summary.meta.num_campaigns}</div></div>
+      <div class="stat"><div class="stat-label">Уникальных search terms</div><div class="stat-value">${summary.meta.num_search_terms}</div></div>
+      <div class="stat"><div class="stat-label">Товаров</div><div class="stat-value">${summary.meta.num_products}</div></div>
+      <div class="stat"><div class="stat-label">ASIN-ов</div><div class="stat-value">${summary.meta.num_asins}</div></div>
+    </div>
+  `;
+
+  // Overall
+  const o = summary.overall;
+  const acosClass = o.acos > 0.5 ? 'danger' : o.acos > 0.36 ? 'warning' : 'success';
+  const wastedClass = summary.wasted_spend_pct > 0.7 ? 'danger' : summary.wasted_spend_pct > 0.5 ? 'warning' : 'success';
+
+  document.getElementById('overallSection').innerHTML = `
+    <h2>💰 Общая статистика</h2>
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-label">Spend</div><div class="stat-value">${fmtMoney(o.spend, c)}</div></div>
+      <div class="stat"><div class="stat-label">Sales</div><div class="stat-value">${fmtMoney(o.sales, c)}</div></div>
+      <div class="stat"><div class="stat-label">Orders</div><div class="stat-value">${fmtInt(o.orders)}</div></div>
+      <div class="stat"><div class="stat-label">Clicks</div><div class="stat-value">${fmtInt(o.clicks)}</div></div>
+      <div class="stat"><div class="stat-label">ACOS</div><div class="stat-value ${acosClass}">${fmtPct(o.acos)}</div></div>
+      <div class="stat"><div class="stat-label">CVR</div><div class="stat-value">${fmtPct(o.cvr)}</div></div>
+      <div class="stat"><div class="stat-label">CPC</div><div class="stat-value">${fmtMoney(o.cpc, c)}</div></div>
+      <div class="stat"><div class="stat-label">Wasted spend</div><div class="stat-value ${wastedClass}">${fmtMoney(summary.wasted_spend_total, c)} (${fmtPct(summary.wasted_spend_pct)})</div></div>
+    </div>
+  `;
+
+  // Products
+  document.getElementById('productsSection').innerHTML = `
+    <h2>🏷 Товары в отчёте</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Товар</th>
+          <th>ASIN(ы)</th>
+          <th class="right">Кампаний</th>
+          <th class="right">Spend</th>
+          <th class="right">Sales</th>
+          <th class="right">Orders</th>
+          <th class="right">ACOS</th>
+          <th class="right">Wasted</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${summary.products.map(p => {
+          const pAcos = p.sales > 0 ? fmtPct(p.acos) : '—';
+          const pAcosClass = p.acos > 0.5 ? 'style="color:var(--danger)"' : p.acos > 0.36 ? 'style="color:var(--warning)"' : '';
+          return `
+            <tr>
+              <td><strong>${p.label}</strong>${p.is_variation_group ? ` <span class="pill kw">${p.asins.length} вариации</span>` : ''}</td>
+              <td class="mono">${p.asins.join(', ')}</td>
+              <td class="right">${p.num_campaigns}</td>
+              <td class="right">${fmtMoney(p.spend, c)}</td>
+              <td class="right">${fmtMoney(p.sales, c)}</td>
+              <td class="right">${p.orders}</td>
+              <td class="right" ${pAcosClass}>${pAcos}</td>
+              <td class="right">${fmtMoney(p.wasted_spend_total, c)} (${fmtPct(p.wasted_spend_pct)})</td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  // Decision distribution
+  const decisions = summary.decision_counts;
+  document.getElementById('decisionsSection').innerHTML = `
+    <h2>🎯 Распределение по действиям (всего ${summary.winners_count + summary.bleeders_count})</h2>
+    ${Object.entries(decisions).map(([d, n]) => `
+      <div class="decision-row">
+        <span class="decision-name">${d}</span>
+        <span class="decision-count">${n}</span>
+      </div>
+    `).join('')}
+    <p style="margin-top:16px;color:var(--muted);font-size:0.9rem">
+      Полный список — в decisions.csv. Открой в Excel, фильтруй по колонке <code>decision</code>.
+    </p>
+  `;
+
+  // Top bleeders HIGH_CLICKS (most actionable)
+  const highBleeders = summary.top_bleeders_high_clicks;
+  document.getElementById('bleedersHighSection').innerHTML = `
+    <h2>💸 Кандидаты на минусование (HIGH_CLICKS) — ${summary.tier_counts.high_clicks} записей</h2>
+    ${highBleeders.length === 0 ? '<p style="color:var(--muted)">Нет search terms с ≥20 кликами и 0 продаж — это хорошо.</p>' : `
+      <table>
+        <thead>
+          <tr>
+            <th>Search term</th>
+            <th>Type</th>
+            <th>Match</th>
+            <th class="right">Clicks</th>
+            <th class="right">Spend</th>
+            <th class="right">CPC</th>
+            <th>Кампания</th>
+            <th>Conflict</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${highBleeders.map(b => `
+            <tr>
+              <td>${b.term}</td>
+              <td><span class="pill ${b.target_type === 'ASIN' ? 'asin' : 'kw'}">${b.target_type}</span></td>
+              <td>${b.match}</td>
+              <td class="right">${b.clicks}</td>
+              <td class="right">${fmtMoney(b.spend, c)}</td>
+              <td class="right">${fmtMoney(b.cpc, c)}</td>
+              <td class="truncate" title="${b.campaign}">${b.campaign}</td>
+              <td>${b.cross_campaign_winner ? '⚠️ да' : '—'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <p style="margin-top:16px;color:var(--muted);font-size:0.9rem">
+        Прежде чем минусовать keyword-таргеты — проверь listing match, индексацию (введи в Amazon search <code>ASIN keyword</code>), релевантность.
+        ASIN-таргеты с conflict-флагом → проверь конкурентскую страницу: ≥4× отзывов или ≥30% дешевле = Negative ASIN.
+      </p>
+    `}
+  `;
+
+  results.classList.add('show');
+  results.scrollIntoView({ behavior: 'smooth' });
+}
+</script>
+
+</body>
+</html>
