@@ -463,6 +463,7 @@ def analyze_bytes(file_bytes: bytes, filename: str) -> dict:
             "clicks": int(r.clicks), "spend": round(r.spend, 2),
             "cpc": round(r.cpc, 4), "impressions": int(r.impressions),
             "ctr": round(r.ctr, 4),
+            "orders": 0,  # by definition for bleeders (orders == 0)
             "tier": r.tier,
             "is_asin_target": is_asin_target,
             "target_type": "ASIN" if is_asin_target else "KEYWORD",
@@ -626,7 +627,8 @@ def build_summary(data: dict) -> dict:
         ],
         "top_bleeders_high_clicks": [
             {k: b[k] for k in ("term", "match", "campaign", "asin", "product_label",
-                               "clicks", "spend", "cpc", "target_type", "cross_campaign_winner")}
+                               "clicks", "spend", "cpc", "orders",
+                               "target_type", "cross_campaign_winner")}
             for b in data["bleeders"]["tier_high_clicks"][:15]
         ],
     }

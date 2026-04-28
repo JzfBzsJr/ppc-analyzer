@@ -442,6 +442,7 @@ function renderResults(data) {
 
   // Top bleeders HIGH_CLICKS (most actionable)
   const highBleeders = summary.top_bleeders_high_clicks;
+  const hasConflicts = highBleeders.some(b => b.cross_campaign_winner);
   document.getElementById('bleedersHighSection').innerHTML = `
     <h2>💸 Кандидаты на минусование (HIGH_CLICKS) — ${summary.tier_counts.high_clicks} записей</h2>
     ${highBleeders.length === 0 ? '<p style="color:var(--muted)">Нет search terms с ≥20 кликами и 0 продаж — это хорошо.</p>' : `
@@ -455,28 +456,34 @@ function renderResults(data) {
             <th class="right">Spend</th>
             <th class="right">CPC</th>
             <th>Кампания</th>
-            <th>Conflict</th>
+            <th class="right">Orders</th>
           </tr>
         </thead>
         <tbody>
           ${highBleeders.map(b => `
             <tr>
-              <td>${b.term}</td>
+              <td>${b.term}${b.cross_campaign_winner ? ' <span title="Variation conflict — этот же search term converts в кампании другой вариации этого товара" style="cursor:help">⚠️</span>' : ''}</td>
               <td><span class="pill ${b.target_type === 'ASIN' ? 'asin' : 'kw'}">${b.target_type}</span></td>
               <td>${b.match}</td>
               <td class="right">${b.clicks}</td>
               <td class="right">${fmtMoney(b.spend, c)}</td>
               <td class="right">${fmtMoney(b.cpc, c)}</td>
               <td class="truncate" title="${b.campaign}">${b.campaign}</td>
-              <td>${b.cross_campaign_winner ? '⚠️ да' : '—'}</td>
+              <td class="right"><strong>${b.orders}</strong></td>
             </tr>
           `).join('')}
         </tbody>
       </table>
       <p style="margin-top:16px;color:var(--muted);font-size:0.9rem">
         Прежде чем минусовать keyword-таргеты — проверь listing match, индексацию (введи в Amazon search <code>ASIN keyword</code>), релевантность.
-        ASIN-таргеты с conflict-флагом → проверь конкурентскую страницу: ≥4× отзывов или ≥30% дешевле = Negative ASIN.
       </p>
+      ${hasConflicts ? `
+        <p style="margin-top:8px;color:var(--muted);font-size:0.9rem">
+          ⚠️ — variation conflict: тот же search term <strong>converts</strong> в кампании другой вариации этого же товара.
+          Перед минусованием — открой decisions.csv, посмотри колонки <code>decision</code> и <code>reason</code>
+          (там будет <code>variation_conflict_review</code> с пояснением A/B/C).
+        </p>
+      ` : ''}
     `}
   `;
 
