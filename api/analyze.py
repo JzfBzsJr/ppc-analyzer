@@ -238,6 +238,15 @@ def _winner_decision(row: dict, target_acos: float = TARGET_ACOS_DEFAULT) -> tup
             return "lower_bid_auto_minus3", f"ACOS {acos*100:.1f}% > {high*100:.0f}%, AUTO step −3%"
 
     if match in ("AUTO", "BROAD", "PHRASE") and acos < target_acos and clicks >= 5:
+        # Спец-случай: тот же term уже работает Exact-ом для этого товара.
+        # Создавать новую SKC бессмысленно — будут конкурировать. Cross-negate.
+        if target_type == "KEYWORD" and row.get("exact_exists_for_same_product"):
+            return "add_negative_exact_in_source", (
+                f"KW-winner ACOS {acos*100:.1f}% CVR {cvr*100:.0f}% {clicks} clicks, "
+                f"но Exact для этого term уже работает в этом товаре. "
+                f"Не создавай новый SKC — добавь в Negative Exact в эту "
+                f"{match}-кампанию, чтобы трафик шёл в существующий Exact."
+            )
         if target_type == "ASIN":
             return "create_pt_campaign", (
                 f"ASIN-winner ACOS {acos*100:.1f}% CVR {cvr*100:.0f}% {clicks} clicks "
@@ -482,6 +491,18 @@ def analyze_bytes(file_bytes: bytes, filename: str) -> dict:
 
     bleeders_flat_df = bleeders_df.sort_values("spend", ascending=False)
     wasted = float(bleeders_flat_df.spend.sum())
+
+    # Exact-already-exists detection for winners.
+    # Если для (term, product_label) уже есть winner с match=EXACT, любой winner
+    # того же term в AUTO/BROAD/PHRASE НЕ должен мигрировать в новую SKC —
+    # cross-negate в source кампанию вместо дубликата.
+    exact_term_set = {
+        (w["term"], w["product_label"]) for w in winners if w["match"] == "EXACT"
+    }
+    for w in winners:
+        w["exact_exists_for_same_product"] = (
+            (w["term"], w["product_label"]) in exact_term_set
+        )
 
     # Cross-campaign winner detection (variation conflict)
     winner_lookup: dict[tuple, list[dict]] = {}
