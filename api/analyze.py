@@ -76,8 +76,11 @@ COLUMN_ALIASES = {
         "Pedidos totales de 7 días (#)",
     ],
     "Date": ["Date", "Start Date", "Fecha de inicio"],
+    "End Date": ["End Date", "Fecha de finalización"],
     "Currency": ["Currency", "Divisa"],
 }
+
+PAUSE_GAP_THRESHOLD_DAYS = 5  # gap между last_active_date и report_end_date
 
 DECISIONS_CSV_COLS = [
     # Amazon report columns in original order
@@ -235,6 +238,16 @@ def _winner_decision(row: dict, target_acos: float = TARGET_ACOS_DEFAULT) -> tup
     cvr = float(row.get("cvr") or 0)
     high = target_acos * 1.2
 
+    # Pause check переопределяет всё
+    if row.get("likely_paused"):
+        gap = row.get("campaign_gap_days", 0)
+        last = row.get("last_active_date", "")
+        return "campaign_likely_paused", (
+            f"Кампания не давала clicks {gap} дней (last activity {last}). "
+            f"Скорее всего на паузе. Действия по этой строке отложены до проверки "
+            f"статуса в Ads Console."
+        )
+
     if acos > high and spend > 10:
         if match == "EXACT":
             return "lower_bid_exact_minus10", f"ACOS {acos*100:.1f}% > {high*100:.0f}%, EXACT step −10%"
@@ -306,6 +319,16 @@ def _bleeder_decision(row: dict) -> tuple[str, str]:
     conflict = bool(row.get("cross_campaign_winner"))
     clicks = int(row.get("clicks") or 0)
     cpc = float(row.get("cpc") or 0)
+
+    # Pause check переопределяет всё
+    if row.get("likely_paused"):
+        gap = row.get("campaign_gap_days", 0)
+        last = row.get("last_active_date", "")
+        return "campaign_likely_paused", (
+            f"Кампания не давала clicks {gap} дней (last activity {last}). "
+            f"Скорее всего на паузе. Действия по этой строке отложены до проверки "
+            f"статуса в Ads Console."
+        )
 
     # SKC subordinate (KW bleeder term-а у которого есть SKC migration primary)
     if row.get("skc_subordinate"):
@@ -427,6 +450,25 @@ def analyze_bytes(file_bytes: bytes, filename: str) -> dict:
         if not c.empty:
             currency = c.iloc[0]
 
+    # Pause detection: для каждой кампании смотрим last_active_date (max End Date).
+    # Если gap от report_end_date >= PAUSE_GAP_THRESHOLD_DAYS → кампания likely paused.
+    paused_campaigns: dict[str, dict] = {}
+    last_active_per_campaign: dict[str, str] = {}
+    if cols["End Date"]:
+        ed_series = pd.to_datetime(df[cols["End Date"]], errors="coerce")
+        df["_end_date"] = ed_series
+        report_end = ed_series.max()
+        if pd.notna(report_end):
+            last_active = df.dropna(subset=["_end_date"]).groupby(cols["Campaign Name"])["_end_date"].max()
+            for camp_name, last_date in last_active.items():
+                last_active_per_campaign[str(camp_name)] = last_date.strftime("%Y-%m-%d")
+                gap = (report_end - last_date).days
+                if gap >= PAUSE_GAP_THRESHOLD_DAYS:
+                    paused_campaigns[str(camp_name)] = {
+                        "last_active_date": last_date.strftime("%Y-%m-%d"),
+                        "gap_days": int(gap),
+                    }
+
     # Aggregate per (term, match, asin, campaign, ad_group, targeting)
     groupby_cols = [cols["Customer Search Term"], "_match", "_asin", cols["Campaign Name"]]
     if cols["Ad Group Name"]:
@@ -495,6 +537,9 @@ def analyze_bytes(file_bytes: bytes, filename: str) -> dict:
             "acos": round(r.acos, 4), "cvr": round(r.cvr, 4),
             "ctr": round(r.ctr, 4),
             "target_type": "ASIN" if ASIN_TARGET_RE.match(str(r.term).strip()) else "KEYWORD",
+            "likely_paused": str(r.campaign) in paused_campaigns,
+            "last_active_date": last_active_per_campaign.get(str(r.campaign), ""),
+            "campaign_gap_days": paused_campaigns.get(str(r.campaign), {}).get("gap_days", 0),
         }
         for r in winners_df.itertuples()
     ]
@@ -529,6 +574,9 @@ def analyze_bytes(file_bytes: bytes, filename: str) -> dict:
             "tier": r.tier,
             "is_asin_target": is_asin_target,
             "target_type": "ASIN" if is_asin_target else "KEYWORD",
+            "likely_paused": str(r.campaign) in paused_campaigns,
+            "last_active_date": last_active_per_campaign.get(str(r.campaign), ""),
+            "campaign_gap_days": paused_campaigns.get(str(r.campaign), {}).get("gap_days", 0),
         }
 
     high_df = bleeders_df[bleeders_df["tier"] == "HIGH_CLICKS"].sort_values(
